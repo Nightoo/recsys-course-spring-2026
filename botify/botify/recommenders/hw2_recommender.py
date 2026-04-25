@@ -4,10 +4,10 @@ import numpy as np
 from botify.recommenders.recommender import Recommender
 
 class Solution(Recommender):
-    def __init__(self, listen_history_redis, tracks_redis, catalog):
+    def __init__(self, listen_history_redis, tracks_redis, fallback_recommender):
         self.listen_history_redis = listen_history_redis
         self.tracks_redis = tracks_redis
-        self.catalog = catalog
+        self.fallback = fallback_recommender
         self.user_vecs = None
         self.track_vecs = None
         self.user_to_idx = {}
@@ -35,6 +35,9 @@ class Solution(Recommender):
                 all_tracks_set.add(track_id)
             if history:
                 user_history[user_id] = history
+
+        if not user_history:
+            return
 
         for u in user_history.keys():
             self.user_to_idx[u] = len(self.idx_to_user)
@@ -82,21 +85,18 @@ class Solution(Recommender):
             entry = json.loads(raw)
             seen.add(int(entry["track"]))
 
-        all_tracks = list(self.catalog.tracks.keys())
-        unseen = [t for t in all_tracks if t not in seen]
-
         if self.user_vecs is None or user not in self.user_to_idx:
-            return random.choice(unseen) if unseen else random.choice(all_tracks)
+            return self.fallback.recommend_next(user, prev_track, prev_track_time)
 
         u_idx = self.user_to_idx[user]
-        scores = []
+        candidates = []
         for t_idx, track_id in enumerate(self.idx_to_track):
             if track_id not in seen:
                 score = np.dot(self.user_vecs[u_idx], self.track_vecs[t_idx])
-                scores.append((score, track_id))
+                candidates.append((score, track_id))
 
-        if not scores:
-            return random.choice(unseen) if unseen else random.choice(all_tracks)
-
-        scores.sort(reverse=True)
-        return scores[0][1]
+        if candidates:
+            candidates.sort(reverse=True)
+            return candidates[0][1]
+        else:
+            return self.fallback.recommend_next(user, prev_track, prev_track_time)
