@@ -41,6 +41,13 @@ class Solution(Recommender):
         self.user_vecs[user_id] = u - self.lr * grad_u
         self.track_vecs[track_id] = t - self.lr * grad_t
 
+    def _any_track(self):
+        if self.catalog.tracks:
+            return next(iter(self.catalog.tracks.keys()))
+        if self.track_vecs:
+            return next(iter(self.track_vecs.keys()))
+        return 0
+
     def recommend_next(self, user: int, prev_track: int, prev_track_time: float) -> int:
         self._sgd_update(user, prev_track, prev_track_time)
 
@@ -51,9 +58,7 @@ class Solution(Recommender):
             seen.add(int(entry["track"]))
 
         if user not in self.user_vecs:
-            all_tracks = list(self.catalog.tracks.keys())
-            unseen = [t for t in all_tracks if t not in seen]
-            return random.choice(unseen) if unseen else random.choice(all_tracks)
+            return self._fallback_safe(user, prev_track, prev_track_time, seen)
 
         u_vec = self.user_vecs[user]
         best_track = None
@@ -70,4 +75,23 @@ class Solution(Recommender):
 
         all_tracks = list(self.catalog.tracks.keys())
         unseen = [t for t in all_tracks if t not in seen]
-        return random.choice(unseen) if unseen else random.choice(all_tracks)
+        if unseen:
+            return random.choice(unseen)
+        if all_tracks:
+            return random.choice(all_tracks)
+        return self._any_track()
+
+    def _fallback_safe(self, user, prev_track, prev_track_time, seen):
+        try:
+            res = self.fallback.recommend_next(user, prev_track, prev_track_time)
+            if res is not None:
+                return res
+        except:
+            pass
+        all_tracks = list(self.catalog.tracks.keys())
+        unseen = [t for t in all_tracks if t not in seen]
+        if unseen:
+            return random.choice(unseen)
+        if all_tracks:
+            return random.choice(all_tracks)
+        return self._any_track()
