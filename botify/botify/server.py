@@ -75,6 +75,7 @@ sasrec_i2i_recommender = I2IRecommender(
 )
 
 hw2_recommender = Solution(listen_history_redis.connection, catalog, random_recommender)
+hw2_recommender.fit()
 
 parser = reqparse.RequestParser()
 parser.add_argument("track", type=int, location="json", required=True)
