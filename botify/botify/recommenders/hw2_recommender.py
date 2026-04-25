@@ -19,15 +19,19 @@ class Solution(Recommender):
         self.track_vecs = {}
 
     def _init_training(self):
+        """Загружаем всю историю и делаем один проход SGD"""
         keys = self.listen_history_redis.keys("user:*:listens")
         for key in keys:
-            user_id = int(key.decode().split(':')[1])
-            raw_entries = self.listen_history_redis.lrange(key, 0, -1)
-            for raw in raw_entries:
-                entry = json.loads(raw)
-                track_id = int(entry["track"])
-                time_val = float(entry["time"])
-                self._sgd_update(user_id, track_id, time_val)
+            try:
+                user_id = int(key.decode().split(':')[1])
+                raw_entries = self.listen_history_redis.lrange(key, 0, -1)
+                for raw in raw_entries:
+                    entry = json.loads(raw)
+                    track_id = int(entry["track"])
+                    time_val = float(entry["time"])
+                    self._sgd_update(user_id, track_id, time_val)
+            except:
+                continue
         self.is_trained = True
 
     def _ensure_vector(self, entity_id, vec_dict):
@@ -37,15 +41,12 @@ class Solution(Recommender):
     def _sgd_update(self, user_id, track_id, time_val):
         self._ensure_vector(user_id, self.user_vecs)
         self._ensure_vector(track_id, self.track_vecs)
-
         u = self.user_vecs[user_id]
         t = self.track_vecs[track_id]
         pred = np.dot(u, t)
         err = time_val - pred
-
         grad_u = -2 * err * t + 2 * self.reg * u
         grad_t = -2 * err * u + 2 * self.reg * t
-
         self.user_vecs[user_id] = u - self.lr * grad_u
         self.track_vecs[track_id] = t - self.lr * grad_t
 
@@ -63,11 +64,15 @@ class Solution(Recommender):
             seen.add(int(entry["track"]))
 
         if user not in self.user_vecs:
-            return self.fallback.recommend_next(user, prev_track, prev_track_time)
+            return self._safe_fallback(user, prev_track, prev_track_time)
 
         u_vec = self.user_vecs[user]
         candidates = []
-        for track_id in self.catalog.tracks.keys():
+        track_ids = list(self.catalog.tracks.keys()) if self.catalog.tracks else list(self.track_vecs.keys())
+        if not track_ids:
+            return self._safe_fallback(user, prev_track, prev_track_time)
+
+        for track_id in track_ids:
             if track_id in seen:
                 continue
             if track_id not in self.track_vecs:
@@ -76,7 +81,19 @@ class Solution(Recommender):
             candidates.append((score, track_id))
 
         if not candidates:
-            return self.fallback.recommend_next(user, prev_track, prev_track_time)
+            return self._safe_fallback(user, prev_track, prev_track_time)
 
         candidates.sort(reverse=True)
         return candidates[0][1]
+
+    def _safe_fallback(self, user, prev_track, prev_track_time):
+        try:
+            res = self.fallback.recommend_next(user, prev_track, prev_track_time)
+            if res is not None:
+                return res
+        except:
+            pass
+        track_ids = list(self.catalog.tracks.keys())
+        if track_ids:
+            return track_ids[0]
+        return 0
