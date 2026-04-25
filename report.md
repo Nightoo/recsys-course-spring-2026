@@ -1,3 +1,9 @@
 ## Homework 2 Report
 
-dragons be here
+## Abstract
+матричная факторизация с градиентным спуском
+
+## Детали
+размерность: 30
+learning rate: 0.05
+эпохи: 25
