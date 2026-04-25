@@ -77,6 +77,7 @@ sasrec_i2i_recommender = I2IRecommender(
 hw2_recommender = Solution(
     listen_history_redis.connection,
     tracks_redis.connection,
+    catalog,
     random_recommender
 )
 
