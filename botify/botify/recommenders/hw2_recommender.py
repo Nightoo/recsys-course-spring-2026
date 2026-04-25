@@ -82,9 +82,10 @@ class Solution(Recommender):
             entry = json.loads(raw)
             seen.add(int(entry["track"]))
 
+        all_tracks = list(self.catalog.tracks.keys())
+        unseen = [t for t in all_tracks if t not in seen]
+
         if self.user_vecs is None or user not in self.user_to_idx:
-            all_tracks = list(self.catalog.tracks.keys())
-            unseen = [t for t in all_tracks if t not in seen]
             return random.choice(unseen) if unseen else random.choice(all_tracks)
 
         u_idx = self.user_to_idx[user]
@@ -95,8 +96,6 @@ class Solution(Recommender):
                 scores.append((score, track_id))
 
         if not scores:
-            all_tracks = list(self.catalog.tracks.keys())
-            unseen = [t for t in all_tracks if t not in seen]
             return random.choice(unseen) if unseen else random.choice(all_tracks)
 
         scores.sort(reverse=True)
