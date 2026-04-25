@@ -1,11 +1,13 @@
 import json
+import os
 import numpy as np
 import pandas as pd
 from .recommender import Recommender
 
 class Solution(Recommender):
     def __init__(self, listen_history_redis, catalog, fallback_recommender,
-                 num_factors=30, lr=0.05, reg=0.02, epochs=20):
+                 num_factors=30, lr=0.05, reg=0.02, epochs=20,
+                 redis_min_records=1000, refit_threshold=5000):
         self.redis = listen_history_redis
         self.catalog = catalog
         self.fallback = fallback_recommender
@@ -13,6 +15,8 @@ class Solution(Recommender):
         self.lr = lr
         self.reg = reg
         self.epochs = epochs
+        self.redis_min_records = redis_min_records
+        self.refit_threshold = refit_threshold
 
         self.user_to_idx = {}
         self.track_to_idx = {}
@@ -20,9 +24,16 @@ class Solution(Recommender):
         self.user_vecs = None
         self.track_vecs = None
         self.is_fitted = False
+        self.last_train_count = 0
 
-    def fit(self):
-        df = self._load_data()
+    def fit(self, csv_path='train.csv'):
+        redis_df = self._load_redis()
+        if len(redis_df) >= self.redis_min_records:
+            df = redis_df
+        elif os.path.exists(csv_path):
+            df = pd.read_csv(csv_path)
+
+        self.last_train_count = len(redis_df) if len(redis_df) >= self.redis_min_records else len(df)
 
         users = df['user'].unique()
         tracks = df['track'].unique()
@@ -54,7 +65,20 @@ class Solution(Recommender):
 
         self.is_fitted = True
 
-    def _load_data(self):
+    def _get_total_redis_records(self):
+        keys = self.redis.keys("user:*:listens")
+        total = 0
+        for key in keys:
+            total += self.redis.llen(key)
+        return total
+
+    def _should_refit(self):
+        if not self.is_fitted:
+            return False
+        current_total = self._get_total_redis_records()
+        return (current_total - self.last_train_count) >= self.refit_threshold
+
+    def _load_redis(self):
         keys = self.redis.keys("user:*:listens")
         if not keys:
             return pd.DataFrame(columns=['user', 'track', 'time'])
@@ -71,6 +95,9 @@ class Solution(Recommender):
         return df
 
     def recommend_next(self, user, prev_track, prev_track_time):
+        if self.is_fitted and self._should_refit():
+            self.fit()
+
         if not self.is_fitted:
             return self.fallback.recommend_next(user, prev_track, prev_track_time)
 
@@ -99,6 +126,10 @@ class Solution(Recommender):
     def _load_user_history(self, user):
         key = f"user:{user}:listens"
         raw = self.redis.lrange(key, 0, -1)
-        return [(json.loads(r.decode() if isinstance(r, bytes) else r)['track'],
-                 json.loads(r.decode() if isinstance(r, bytes) else r)['time'])
-                for r in raw]
+        res = []
+        for r in raw:
+            if isinstance(r, bytes):
+                r = r.decode()
+            data = json.loads(r)
+            res.append((data['track'], data['time']))
+        return res
