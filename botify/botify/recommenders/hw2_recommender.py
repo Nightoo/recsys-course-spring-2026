@@ -32,6 +32,8 @@ class Solution(Recommender):
             df = redis_df
         elif os.path.exists(csv_path):
             df = pd.read_csv(csv_path)
+        else:
+            return
 
         self.last_train_count = len(redis_df) if len(redis_df) >= self.redis_min_records else len(df)
 
