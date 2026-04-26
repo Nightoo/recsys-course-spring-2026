@@ -74,11 +74,10 @@ sasrec_i2i_recommender = I2IRecommender(
     random_recommender,
 )
 
-hw2_recommender = Solution(
+hw2_recommender = I2IRecommender(
     listen_history_redis.connection,
-    tracks_redis.connection,
-    catalog,
-    random_recommender
+    recommendations_contextual_redis.connection,
+    random_recommender,
 )
 
 parser = reqparse.RequestParser()
