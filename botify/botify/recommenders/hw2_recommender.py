@@ -1,4 +1,5 @@
 import json
+import random
 import numpy as np
 from collections import defaultdict
 from botify.recommenders.recommender import Recommender
@@ -7,66 +8,78 @@ class Solution(Recommender):
     def __init__(self, listen_history_redis, tracks_redis, catalog, fallback_recommender):
         self.listen_history_redis = listen_history_redis
         self.fallback = fallback_recommender
-        self.similar_users = {}
-        self.user_tracks = {}
-        self._build_user_similarity()
+        self.num_factors = 50
+        self.lr = 0.01
+        self.reg = 0.01
+        self.epochs = 30
+        self.user_vecs = {}
+        self.track_vecs = {}
+        self._bpr_train()
 
-    def _build_user_similarity(self):
+    def _bpr_train(self):
         keys = self.listen_history_redis.keys("user:*:listens")
+        user_pos = defaultdict(set)
+        all_tracks = set()
         for key in keys:
             user_id = int(key.decode().split(':')[1])
-            tracks = set()
             for raw in self.listen_history_redis.lrange(key, 0, -1):
                 entry = json.loads(raw)
-                tracks.add(int(entry["track"]))
-            if tracks:
-                self.user_tracks[user_id] = tracks
+                track_id = int(entry["track"])
+                user_pos[user_id].add(track_id)
+                all_tracks.add(track_id)
 
-        if len(self.user_tracks) < 2:
+        if not user_pos or not all_tracks:
             return
 
-        user_list = list(self.user_tracks.keys())
-        user_idx = {u: i for i, u in enumerate(user_list)}
-        num_users = len(user_list)
-        all_tracks = set()
-        for tracks in self.user_tracks.values():
-            all_tracks.update(tracks)
-        track_to_idx = {t: i for i, t in enumerate(all_tracks)}
-        num_tracks = len(all_tracks)
-        matrix = np.zeros((num_users, num_tracks), dtype=bool)
-        for u, tracks in self.user_tracks.items():
-            u_i = user_idx[u]
-            for t in tracks:
-                if t in track_to_idx:
-                    matrix[u_i, track_to_idx[t]] = True
-        norm = np.sqrt(matrix.sum(axis=1, keepdims=True))
-        norm[norm == 0] = 1
-        matrix_norm = matrix / norm
-        sim_matrix = matrix_norm @ matrix_norm.T  # (num_users, num_users)
-        for i, u in enumerate(user_list):
-            sims = [(sim_matrix[i, j], user_list[j]) for j in range(num_users) if j != i]
-            sims.sort(reverse=True)
-            self.similar_users[u] = sims[:50]
+        for u in user_pos:
+            self.user_vecs[u] = np.random.normal(0, 0.1, self.num_factors)
+        for t in all_tracks:
+            self.track_vecs[t] = np.random.normal(0, 0.1, self.num_factors)
+
+        track_list = list(all_tracks)
+
+        for epoch in range(self.epochs):
+            users = list(user_pos.keys())
+            random.shuffle(users)
+            for u in users:
+                pos_set = user_pos[u]
+                if len(pos_set) == 0:
+                    continue
+                pos = random.sample(pos_set, 1)[0]
+                neg = random.choice(track_list)
+                while neg in pos_set:
+                    neg = random.choice(track_list)
+                x_ui = np.dot(self.user_vecs[u], self.track_vecs[pos])
+                x_uj = np.dot(self.user_vecs[u], self.track_vecs[neg])
+                sig = 1.0 / (1.0 + np.exp(x_uj - x_ui))
+                grad_u = (self.track_vecs[pos] - self.track_vecs[neg]) * sig - self.reg * self.user_vecs[u]
+                grad_pos = self.user_vecs[u] * sig - self.reg * self.track_vecs[pos]
+                grad_neg = -self.user_vecs[u] * sig - self.reg * self.track_vecs[neg]
+                self.user_vecs[u] += self.lr * grad_u
+                self.track_vecs[pos] += self.lr * grad_pos
+                self.track_vecs[neg] += self.lr * grad_neg
 
     def recommend_next(self, user: int, prev_track: int, prev_track_time: float) -> int:
         key = f"user:{user}:listens"
-        history = set()
+        seen = set()
         for raw in self.listen_history_redis.lrange(key, 0, -1):
             entry = json.loads(raw)
-            history.add(int(entry["track"]))
+            seen.add(int(entry["track"]))
 
-        if user not in self.similar_users:
+        if user not in self.user_vecs:
             return self.fallback.recommend_next(user, prev_track, prev_track_time)
 
-        candidate_scores = defaultdict(float)
-        for sim, other_user in self.similar_users[user]:
-            other_tracks = self.user_tracks.get(other_user, set())
-            for track in other_tracks:
-                if track not in history:
-                    candidate_scores[track] += sim
+        u_vec = self.user_vecs[user]
+        best_track = None
+        best_score = -float('inf')
+        for track_id, t_vec in self.track_vecs.items():
+            if track_id in seen:
+                continue
+            score = np.dot(u_vec, t_vec)
+            if score > best_score:
+                best_score = score
+                best_track = track_id
 
-        if not candidate_scores:
+        if best_track is None:
             return self.fallback.recommend_next(user, prev_track, prev_track_time)
-
-        best_track = max(candidate_scores, key=candidate_scores.get)
         return best_track
