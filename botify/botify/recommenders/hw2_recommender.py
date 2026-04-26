@@ -1,56 +1,71 @@
 import json
 import random
 import numpy as np
+from collections import defaultdict
 from botify.recommenders.recommender import Recommender
 
 class Solution(Recommender):
     def __init__(self, listen_history_redis, tracks_redis, catalog, fallback_recommender):
         self.listen_history_redis = listen_history_redis
         self.fallback = fallback_recommender
-        self.num_factors = 30
-        self.lr = 0.05
-        self.reg = 0.02
-        self.user_vecs = {}
-        self.track_vecs = {}
+        self.track_similarity = {}
+        self.track_history = defaultdict(set)
+        self._update_from_history()
 
-    def _ensure_vector(self, entity_id, vec_dict):
-        if entity_id not in vec_dict:
-            vec_dict[entity_id] = np.random.normal(0, 0.1, self.num_factors)
+    def _update_from_history(self):
+        keys = self.listen_history_redis.keys("user:*:listens")
+        user_tracks = {}  # user_id -> set of track_ids
+        for key in keys:
+            user_id = int(key.decode().split(':')[1])
+            tracks = set()
+            for raw in self.listen_history_redis.lrange(key, 0, -1):
+                entry = json.loads(raw)
+                track_id = int(entry["track"])
+                tracks.add(track_id)
+                self.track_history[track_id].add(user_id)
+            if tracks:
+                user_tracks[user_id] = tracks
 
-    def _sgd_update(self, user_id, track_id, time_val):
-        self._ensure_vector(user_id, self.user_vecs)
-        self._ensure_vector(track_id, self.track_vecs)
-        u = self.user_vecs[user_id]
-        t = self.track_vecs[track_id]
-        pred = np.dot(u, t)
-        err = time_val - pred
-        grad_u = -2 * err * t + 2 * self.reg * u
-        grad_t = -2 * err * u + 2 * self.reg * t
-        self.user_vecs[user_id] = u - self.lr * grad_u
-        self.track_vecs[track_id] = t - self.lr * grad_t
+        track_list = list(self.track_history.keys())
+        if len(track_list) > 1000:
+            pop = [(len(self.track_history[t]), t) for t in track_list]
+            pop.sort(reverse=True)
+            track_list = [t for _, t in pop[:1000]]
+
+        track_idx = {t: i for i, t in enumerate(track_list)}
+        num_users = len(user_tracks)
+        num_tracks = len(track_list)
+        if num_tracks == 0:
+            return
+        matrix = np.zeros((num_users, num_tracks), dtype=bool)
+        user_idx = {u: i for i, u in enumerate(user_tracks.keys())}
+        for u, tracks in user_tracks.items():
+            u_i = user_idx[u]
+            for t in tracks:
+                if t in track_idx:
+                    matrix[u_i, track_idx[t]] = True
+
+        norm = np.sqrt(matrix.sum(axis=1, keepdims=True))
+        norm[norm == 0] = 1
+        matrix_norm = matrix / norm
+        sim = matrix_norm.T @ matrix_norm  # (num_tracks, num_tracks)
+        for i, t in enumerate(track_list):
+            scores = [(sim[i, j], track_list[j]) for j in range(num_tracks) if j != i and sim[i, j] > 0]
+            scores.sort(reverse=True)
+            self.track_similarity[t] = scores[:20]  # топ-20
 
     def recommend_next(self, user: int, prev_track: int, prev_track_time: float) -> int:
-        self._sgd_update(user, prev_track, prev_track_time)
-
         key = f"user:{user}:listens"
-        seen = set()
+        history_tracks = set()
         for raw in self.listen_history_redis.lrange(key, 0, -1):
             entry = json.loads(raw)
-            seen.add(int(entry["track"]))
+            history_tracks.add(int(entry["track"]))
 
-        if user not in self.user_vecs:
+        if prev_track not in self.track_similarity:
             return self.fallback.recommend_next(user, prev_track, prev_track_time)
 
-        u_vec = self.user_vecs[user]
-        best_track = None
-        best_score = -float('inf')
-        for track_id, t_vec in self.track_vecs.items():
-            if track_id not in seen:
-                score = np.dot(u_vec, t_vec)
-                if score > best_score:
-                    best_score = score
-                    best_track = track_id
+        for score, cand in self.track_similarity[prev_track]:
+            if cand not in history_tracks:
+                return cand
 
-        if best_track is not None:
-            return best_track
         return self.fallback.recommend_next(user, prev_track, prev_track_time)
