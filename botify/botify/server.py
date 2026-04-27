@@ -15,7 +15,6 @@ from botify.experiment import Experiments, Treatment
 from botify.recommenders.i2i import I2IRecommender
 from botify.recommenders.random import Random
 from botify.recommenders.sticky_artist import StickyArtist
-from botify.recommenders.hw2_recommender import Solution
 from botify.track import Catalog
 
 root = logging.getLogger()
@@ -74,12 +73,20 @@ sasrec_i2i_recommender = I2IRecommender(
     random_recommender,
 )
 
-hw2_recommender =Solution(
+hw2_redis = Redis(app, config_prefix="REDIS_RECOMMENDATIONS_HW2")
+catalog.upload_recommendations(
+    hw2_redis.connection,
+    "RECOMMENDATIONS_HW2_FILE_PATH",
+    key_object="item_id",
+    key_recommendations="recommendations"
+)
+
+hw2_recommender = I2IRecommender(
     listen_history_redis.connection,
-    tracks_redis.connection,
-    catalog,
+    hw2_redis.connection,
     random_recommender
 )
+
 parser = reqparse.RequestParser()
 parser.add_argument("track", type=int, location="json", required=True)
 parser.add_argument("time", type=float, location="json", required=True)
