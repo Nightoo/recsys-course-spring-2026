@@ -82,7 +82,11 @@ catalog.upload_recommendations(
     key_recommendations="recommendations"
 )
 
-hw2_recommender = Solution(listen_history_redis, random_recommender)
+hw2_recommender = I2IRecommender(
+    listen_history_redis.connection,
+    hw2_redis.connection,
+    random_recommender,
+)
 parser = reqparse.RequestParser()
 parser.add_argument("track", type=int, location="json", required=True)
 parser.add_argument("time", type=float, location="json", required=True)
