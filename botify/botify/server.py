@@ -16,6 +16,7 @@ from botify.recommenders.i2i import I2IRecommender
 from botify.recommenders.random import Random
 from botify.recommenders.sticky_artist import StickyArtist
 from botify.track import Catalog
+from botify.recommenders.hw2_recommender import Solution
 
 root = logging.getLogger()
 root.setLevel("INFO")
@@ -81,12 +82,7 @@ catalog.upload_recommendations(
     key_recommendations="recommendations"
 )
 
-hw2_recommender = I2IRecommender(
-    listen_history_redis.connection,
-    hw2_redis.connection,
-    random_recommender
-)
-
+hw2_recommender = Solution(listen_history_redis, random_recommender)
 parser = reqparse.RequestParser()
 parser.add_argument("track", type=int, location="json", required=True)
 parser.add_argument("time", type=float, location="json", required=True)
